@@ -24,10 +24,13 @@ OWN_JID = f"{GREEN_API_INSTANCE}@c.us"
 
 # Business hours from spec
 _hours = SPEC.get("business_hours", {})
-_HOUR_START = int(_hours.get("start", "07:00").split(":")[0])
-_HOUR_END = int(_hours.get("end", "21:00").split(":")[0])
 _OFF_HOURS_MSG = _hours.get("off_hours_message", "נחזור אליכם בשעות הפעילות.")
 _OFF_HOURS_MODE = SPEC.get("extras", {}).get("off_hours_mode", "always_reply")
+_TZ = ZoneInfo(_hours.get("timezone", "Asia/Jerusalem"))
+_SCHEDULE = _hours.get("schedule", {})  # day → {start, end}
+
+# VIP phones — always reply regardless of business hours
+_VIP_PHONES = set(SPEC.get("vip_phones", []))
 
 # Audience settings
 _ANSWER_GROUPS = SPEC.get("audience", {}).get("answer_groups", False)
@@ -36,13 +39,20 @@ _AUTHORIZED_CONTACTS = {
     c["phone_e164"] for c in SPEC.get("audience", {}).get("authorized_contacts", [])
 }
 
-
-_TZ = ZoneInfo(SPEC.get("business_hours", {}).get("timezone", "Asia/Jerusalem"))
+# Day index → schedule key (Python weekday: Mon=0 … Sun=6)
+_DAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
 
 def _is_business_hours() -> bool:
-    now = datetime.now(_TZ).hour
-    return _HOUR_START <= now < _HOUR_END
+    now = datetime.now(_TZ)
+    day_key = _DAY_KEYS[now.weekday()]
+    day = _SCHEDULE.get(day_key)
+    if not day:
+        return False  # closed today
+    sh, sm = map(int, day["start"].split(":"))
+    eh, em = map(int, day["end"].split(":"))
+    cur = now.hour * 60 + now.minute
+    return (sh * 60 + sm) <= cur < (eh * 60 + em)
 
 
 def _is_authorized(sender_phone: str) -> bool:
@@ -133,8 +143,9 @@ async def webhook(request: Request):
             mark_processed(id_message)
         return JSONResponse({"status": "ok"})
 
-    # Business hours check
-    if _OFF_HOURS_MODE == "business_hours_only" and not _is_business_hours():
+    # Business hours check (VIP phones always get a reply)
+    is_vip = sender_phone in _VIP_PHONES
+    if _OFF_HOURS_MODE == "business_hours_only" and not _is_business_hours() and not is_vip:
         send_reply(chat_id, _OFF_HOURS_MSG)
         if id_message:
             mark_processed(id_message)
