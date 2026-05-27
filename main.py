@@ -4,6 +4,7 @@ Receives webhooks from Green API, filters messages, calls agent, sends reply.
 """
 import logging
 from datetime import datetime, time
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -36,8 +37,11 @@ _AUTHORIZED_CONTACTS = {
 }
 
 
+_TZ = ZoneInfo(SPEC.get("business_hours", {}).get("timezone", "Asia/Jerusalem"))
+
+
 def _is_business_hours() -> bool:
-    now = datetime.now().hour
+    now = datetime.now(_TZ).hour
     return _HOUR_START <= now < _HOUR_END
 
 
