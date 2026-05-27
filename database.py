@@ -58,6 +58,13 @@ def tail(chat_id: str, n: int = 20) -> list[dict]:
     return [{"role": row["role"], "content": row["content"]} for row in rows]
 
 
+def clear_history(chat_id: str) -> None:
+    """Delete all conversation history for a given chat_id."""
+    with _conn() as conn:
+        conn.execute("DELETE FROM conversations WHERE chat_id = ?", (chat_id,))
+        conn.commit()
+
+
 def is_processed(id_message: str) -> bool:
     with _conn() as conn:
         row = conn.execute(

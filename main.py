@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 
 from agent import handle_message
 from config import GREEN_API_INSTANCE, SPEC
-from database import init_db, is_processed, mark_processed
+from database import init_db, is_processed, mark_processed, clear_history
 from tools.whatsapp import send_reply
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -139,6 +139,14 @@ async def webhook(request: Request):
         if id_message:
             mark_processed(id_message)
         return JSONResponse({"status": "ok", "reason": "off hours"})
+
+    # /reset command — clears conversation history for this chat
+    if message_text.strip() == "/reset":
+        clear_history(chat_id)
+        send_reply(chat_id, "✅ שיחה אופסה — אפשר להתחיל מחדש!")
+        if id_message:
+            mark_processed(id_message)
+        return JSONResponse({"status": "ok", "reason": "reset"})
 
     # Mark as processed before calling LLM (prevents double-processing on crash)
     if id_message:
