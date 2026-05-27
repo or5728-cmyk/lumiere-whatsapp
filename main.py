@@ -6,18 +6,22 @@ import logging
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from agent import handle_message
 from config import GREEN_API_INSTANCE, SPEC
-from database import init_db, is_processed, mark_processed, clear_history
+from database import (init_db, is_processed, mark_processed, clear_history,
+                      add_pending_followup, get_pending_followups, remove_pending_followup)
 from tools.whatsapp import send_reply
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Lumière WhatsApp Bot")
+_scheduler = BackgroundScheduler(timezone="Asia/Jerusalem")
 
 # The bot's own JID — messages from self should be ignored
 OWN_JID = f"{GREEN_API_INSTANCE}@c.us"
@@ -62,10 +66,44 @@ def _is_authorized(sender_phone: str) -> bool:
     return sender_phone in _AUTHORIZED_CONTACTS
 
 
+def _send_followups(greeting: str) -> None:
+    """Send a follow-up message to everyone who wrote outside business hours."""
+    pending = get_pending_followups()
+    if not pending:
+        return
+    msg = f"היי 🌸 {greeting}! אנחנו כבר כאן — ספרי לי על האירוע שלך 😊"
+    for item in pending:
+        try:
+            send_reply(item["chat_id"], msg)
+            remove_pending_followup(item["chat_id"])
+            logger.info(f"Sent follow-up to {item['chat_id']}")
+        except Exception as e:
+            logger.error(f"Follow-up failed for {item['chat_id']}: {e}")
+
+
 @app.on_event("startup")
 async def startup():
     init_db()
+    # Schedule follow-ups at each business-hours opening (Israel time)
+    # Sun–Fri at 06:30  (weekday: Mon=0…Fri=4, Sun=6)
+    _scheduler.add_job(
+        _send_followups, CronTrigger(day_of_week="0-4,6", hour=6, minute=30,
+                                     timezone="Asia/Jerusalem"),
+        args=["בוקר טוב"], id="followup_morning", replace_existing=True
+    )
+    # Saturday at 20:30
+    _scheduler.add_job(
+        _send_followups, CronTrigger(day_of_week=5, hour=20, minute=30,
+                                     timezone="Asia/Jerusalem"),
+        args=["ערב טוב"], id="followup_saturday", replace_existing=True
+    )
+    _scheduler.start()
     logger.info("Lumière bot started ✨")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    _scheduler.shutdown(wait=False)
 
 
 @app.get("/health")
@@ -147,9 +185,13 @@ async def webhook(request: Request):
     is_vip = sender_phone in _VIP_PHONES
     if _OFF_HOURS_MODE == "business_hours_only" and not _is_business_hours() and not is_vip:
         send_reply(chat_id, _OFF_HOURS_MSG)
+        add_pending_followup(chat_id, sender_name)  # remember to follow up
         if id_message:
             mark_processed(id_message)
         return JSONResponse({"status": "ok", "reason": "off hours"})
+
+    # Customer wrote during business hours — cancel any pending follow-up
+    remove_pending_followup(chat_id)
 
     # /reset command — clears conversation history for this chat
     if message_text.strip() == "/reset":
