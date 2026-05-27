@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "project_dir": "/Users/thequeen/Desktop/קלוד קוד/צאט בוט",
+  "bot_name": "Lumière",
+  "archetype": "customer_service",
+  "current_stage": "deploy",
+  "completed_stages": ["setup", "characterize", "build"],
+  "connected_tools": [],
+  "render_url": null,
+  "last_touched_iso": "2026-05-26T00:00:00Z"
+}
