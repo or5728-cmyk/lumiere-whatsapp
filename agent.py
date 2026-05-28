@@ -15,6 +15,12 @@ FRAMEWORK_INJECTED_CHAT_ID = {
     "schedule_reminder",
     "list_reminders",
     "cancel_reminder",
+    "create_lead",
+}
+
+# Tools that also need sender_name injected by the framework.
+FRAMEWORK_INJECTED_SENDER_NAME = {
+    "create_lead",
 }
 
 MAX_TOOL_ITERATIONS = 5
@@ -22,7 +28,7 @@ MAX_TOOL_ITERATIONS = 5
 _client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 
-def _run_tool(tool_use, chat_id: str) -> str:
+def _run_tool(tool_use, chat_id: str, sender_name: str = "") -> str:
     """Execute a tool call and return a string result."""
     tool_name = tool_use.name
     if tool_name not in TOOL_REGISTRY:
@@ -31,9 +37,11 @@ def _run_tool(tool_use, chat_id: str) -> str:
     tool_def = TOOL_REGISTRY[tool_name]
     tool_input = dict(tool_use.input or {})
 
-    # Framework injects chat_id — LLM value is overridden
+    # Framework injects chat_id and optionally sender_name — LLM values are overridden
     if tool_name in FRAMEWORK_INJECTED_CHAT_ID:
         tool_input["chat_id"] = chat_id
+    if tool_name in FRAMEWORK_INJECTED_SENDER_NAME:
+        tool_input["sender_name"] = sender_name
 
     try:
         result = tool_def["fn"](**tool_input)
@@ -88,7 +96,7 @@ def handle_message(chat_id: str, sender_name: str, message_text: str) -> str:
             tool_results = []
             for block in response.content:
                 if block.type == "tool_use":
-                    result = _run_tool(block, chat_id)
+                    result = _run_tool(block, chat_id, sender_name)
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,

@@ -33,6 +33,11 @@ if LLM_PROVIDER == "openai" and not OPENAI_API_KEY:
 DATABASE_PATH = os.getenv("DATABASE_PATH", "data/conversations.db")
 MAX_HISTORY = int(os.getenv("MAX_HISTORY", "20"))
 
+# Supabase CRM (optional — tools only activate when both are set)
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+SUPABASE_ASSIGNED_TO = os.getenv("SUPABASE_ASSIGNED_TO", "367654fb-e54f-4cda-b452-19c3e1c0e690")
+
 # Spec
 _spec_path = Path(__file__).parent / "spec.json"
 if not _spec_path.exists():
