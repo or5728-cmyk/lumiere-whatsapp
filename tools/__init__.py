@@ -9,6 +9,6 @@ register(TOOL_REGISTRY)
 
 # Register Supabase CRM tools only when env vars are configured
 import os as _os
-if _os.getenv("SUPABASE_URL") and _os.getenv("SUPABASE_SERVICE_ROLE_KEY"):
+if _os.getenv("BOT_API_URL") and _os.getenv("BOT_API_KEY"):
     from tools.supabase_crm import register as _register_crm  # noqa: E402
     _register_crm(TOOL_REGISTRY)

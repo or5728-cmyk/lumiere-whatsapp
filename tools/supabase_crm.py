@@ -1,27 +1,24 @@
 """
-tools/supabase_crm.py — Supabase CRM integration for Lumière.
+tools/supabase_crm.py — Bot API integration for Lumière CRM.
 Two tools: check_date_availability and create_lead.
 """
 import os
 import httpx
 from datetime import datetime
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
-ASSIGNED_TO = os.getenv("SUPABASE_ASSIGNED_TO", "367654fb-e54f-4cda-b452-19c3e1c0e690")
+BOT_API_URL = os.getenv("BOT_API_URL", "").rstrip("/")
+BOT_API_KEY = os.getenv("BOT_API_KEY", "")
 
 
 def _headers() -> dict:
     return {
-        "apikey": SUPABASE_KEY,
-        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "x-bot-key": BOT_API_KEY,
         "Content-Type": "application/json",
-        "Prefer": "return=representation",
     }
 
 
 def _to_iso_date(date_str: str) -> str:
-    """Convert dd.MM.yyyy / dd/MM/yyyy / d.M.yyyy to yyyy-MM-dd."""
+    """Convert dd.MM.yyyy / dd/MM/yyyy to yyyy-MM-dd."""
     if not date_str:
         return ""
     for fmt in ("%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d", "%d.%m.%y", "%d/%m/%y"):
@@ -33,40 +30,23 @@ def _to_iso_date(date_str: str) -> str:
 
 
 def check_date_availability(date: str) -> str:
-    if not SUPABASE_URL or not SUPABASE_KEY:
+    if not BOT_API_URL or not BOT_API_KEY:
         return "שירות הזמינות לא מחובר כרגע"
 
     iso_date = _to_iso_date(date)
     try:
         with httpx.Client(timeout=10) as client:
-            # Check blocked days first
-            r = client.get(
-                f"{SUPABASE_URL}/rest/v1/blocked_days",
-                params={"date": f"eq.{iso_date}"},
+            r = client.post(
+                BOT_API_URL,
+                json={"action": "check_availability", "date": iso_date},
                 headers=_headers()
             )
             r.raise_for_status()
-            blocked = r.json()
-            if blocked:
-                reason = blocked[0].get("reason", "") or "חסום"
-                return f"התאריך {date} חסום ({reason}) - לא זמינים"
-
-            # Check existing events
-            r2 = client.get(
-                f"{SUPABASE_URL}/rest/v1/events",
-                params={
-                    "date": f"eq.{iso_date}",
-                    "archived_at": "is.null",
-                    "status": "neq.cancelled",
-                },
-                headers=_headers()
-            )
-            r2.raise_for_status()
-            events = r2.json()
-            if events:
-                return f"התאריך {date} תפוס - יש כבר אירוע ביומן. כדאי לבדוק עם הצוות"
-
-        return f"התאריך {date} פנוי"
+            data = r.json()
+            if data.get("available") is False:
+                reason = data.get("reason", "תפוס")
+                return f"התאריך {date} לא זמין ({reason})"
+            return f"התאריך {date} פנוי"
     except Exception as e:
         return f"לא הצלחתי לבדוק זמינות: {e}"
 
@@ -84,54 +64,42 @@ def create_lead(
     children_count: int = 0,
     notes: str = ""
 ) -> str:
-    if not SUPABASE_URL or not SUPABASE_KEY:
+    if not BOT_API_URL or not BOT_API_KEY:
         return "שירות ה-CRM לא מחובר כרגע"
 
     phone = chat_id.replace("@c.us", "").replace("@g.us", "")
     name = sender_name or "לא ידוע"
     iso_date = _to_iso_date(date) if date else ""
 
+    # Fold extra details into notes
+    extra = []
+    if allergies:
+        extra.append(f"אלרגיות: {allergies}")
+    if has_children and children_count:
+        extra.append(f"ילדים: {children_count}")
+    if event_time:
+        extra.append(f"שעה: {event_time}")
+    if notes:
+        extra.append(notes)
+    full_notes = " | ".join(extra) if extra else "הגיע מהבוט בוואטסאפ"
+
     try:
         with httpx.Client(timeout=10) as client:
-            # 1. Create customer
-            r_cust = client.post(
-                f"{SUPABASE_URL}/rest/v1/customers",
+            r = client.post(
+                BOT_API_URL,
                 json={
+                    "action": "create_lead",
                     "name": name,
                     "phone": phone,
-                    "city": location or "",
-                    "lead_source": "whatsapp",
-                    "assigned_to": ASSIGNED_TO,
-                    "notes": notes or "",
-                },
-                headers=_headers()
-            )
-            r_cust.raise_for_status()
-            customer_id = r_cust.json()[0]["id"]
-
-            # 2. Create event
-            r_evt = client.post(
-                f"{SUPABASE_URL}/rest/v1/events",
-                json={
-                    "customer_id": customer_id,
-                    "customer_name": name,
                     "date": iso_date,
-                    "time": event_time or "",
                     "event_type": event_type or "",
-                    "guest_count": int(guest_count) if guest_count else 30,
+                    "guest_count": int(guest_count) if guest_count else 0,
                     "location": location or "",
-                    "status": "lead",
-                    "assigned_to": ASSIGNED_TO,
-                    "has_children": bool(has_children),
-                    "children_count": int(children_count) if children_count else 0,
-                    "allergies": allergies or "",
-                    "notes": notes or "",
-                    "deposit_paid": False,
+                    "notes": full_notes,
                 },
                 headers=_headers()
             )
-            r_evt.raise_for_status()
-
+            r.raise_for_status()
         return f"ליד נוצר ב-CRM: {name}"
     except Exception as e:
         return f"שגיאה ביצירת הליד: {e}"
@@ -147,7 +115,7 @@ def register(registry: dict) -> None:
                 "properties": {
                     "date": {
                         "type": "string",
-                        "description": "התאריך בפורמט dd.MM.yyyy (לדוגמה: 15.08.2025)"
+                        "description": "התאריך בפורמט dd.MM.yyyy (לדוגמה: 15.08.2026)"
                     }
                 },
                 "required": ["date"]
