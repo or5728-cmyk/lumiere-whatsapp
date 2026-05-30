@@ -120,6 +120,9 @@ def handle_message(chat_id: str, sender_name: str, message_text: str) -> str:
     if not reply_text:
         reply_text = "תודה על פנייתך! נחזור אליך בהקדם 🌸"
 
+    # Normalize punctuation — replace em dash with regular hyphen
+    reply_text = reply_text.replace("—", "-").replace("–", "-")
+
     # Persist to DB
     append(chat_id, "user", message_text)
     append(chat_id, "assistant", reply_text)
