@@ -3,7 +3,7 @@ main.py — FastAPI app.
 Receives webhooks from Green API, filters messages, calls agent, sends reply.
 """
 import logging
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -22,6 +22,28 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Lumière WhatsApp Bot")
 _scheduler = BackgroundScheduler(timezone="Asia/Jerusalem")
+
+# Batch window: wait this many seconds for more messages before replying
+_BATCH_DELAY = 30
+
+# Pending batches: chat_id -> {"messages": [...], "sender_name": "..."}
+_pending: dict[str, dict] = {}
+
+
+def _flush_pending(chat_id: str) -> None:
+    """Process all queued messages for a chat after the batch window closes."""
+    entry = _pending.pop(chat_id, None)
+    if not entry:
+        return
+    combined = "\n".join(entry["messages"])
+    sender_name = entry["sender_name"]
+    try:
+        reply = handle_message(chat_id, sender_name, combined)
+        send_reply(chat_id, reply)
+        logger.info(f"Replied to {chat_id}: {reply[:60]}...")
+    except Exception as e:
+        logger.error(f"Error handling batch for {chat_id}: {e}", exc_info=True)
+        send_reply(chat_id, "אוי, קרתה תקלה קטנה 😅 נחזור אליכם עוד רגע!")
 
 # The bot's own JID — messages from self should be ignored
 OWN_JID = f"{GREEN_API_INSTANCE}@c.us"
@@ -201,16 +223,23 @@ async def webhook(request: Request):
             mark_processed(id_message)
         return JSONResponse({"status": "ok", "reason": "reset"})
 
-    # Mark as processed before calling LLM (prevents double-processing on crash)
+    # Mark as processed immediately (prevents duplicate processing if webhook retries)
     if id_message:
         mark_processed(id_message)
 
-    try:
-        reply = handle_message(chat_id, sender_name, message_text)
-        send_reply(chat_id, reply)
-        logger.info(f"Replied to {chat_id}: {reply[:60]}...")
-    except Exception as e:
-        logger.error(f"Error handling message: {e}", exc_info=True)
-        send_reply(chat_id, "אוי, קרתה תקלה קטנה 😅 נחזור אליכם עוד רגע!")
+    # Add to batch and (re)schedule flush after BATCH_DELAY seconds
+    if chat_id not in _pending:
+        _pending[chat_id] = {"messages": [], "sender_name": sender_name}
+    _pending[chat_id]["messages"].append(message_text)
+
+    _scheduler.add_job(
+        _flush_pending,
+        "date",
+        run_date=datetime.now(_TZ) + timedelta(seconds=_BATCH_DELAY),
+        args=[chat_id],
+        id=f"flush_{chat_id}",
+        replace_existing=True,
+    )
+    logger.info(f"Queued message from {chat_id} (batch in {_BATCH_DELAY}s)")
 
     return JSONResponse({"status": "ok"})
