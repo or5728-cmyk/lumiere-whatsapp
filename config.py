@@ -44,3 +44,15 @@ if not _spec_path.exists():
 
 with open(_spec_path, encoding="utf-8") as f:
     SPEC = json.load(f)
+
+# Customer-side behaviour:
+#   "auto_reply_once" — one fixed message to a first-time contact, then silence
+#   "full_agent"      — the original LLM sales conversation
+BOT_MODE = os.getenv("BOT_MODE", "auto_reply_once")
+
+# The fixed message. Env var wins so it can be changed on Render without a deploy.
+# Empty means: send nothing at all (safe default until the final wording is set).
+AUTO_REPLY_MESSAGE = (
+    os.getenv("AUTO_REPLY_MESSAGE")
+    or SPEC.get("auto_reply", {}).get("message", "")
+).strip()
