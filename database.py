@@ -36,6 +36,13 @@ def init_db() -> None:
                 created_at TEXT NOT NULL
             )
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS greeted_chats (
+                chat_id TEXT PRIMARY KEY,
+                reason TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
         conn.commit()
 
 
@@ -113,4 +120,35 @@ def mark_processed(id_message: str) -> None:
             "INSERT OR IGNORE INTO processed_messages (id_message, processed_at) VALUES (?, ?)",
             (id_message, datetime.utcnow().isoformat())
         )
+        conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Greeted chats — each contact receives the fixed auto-reply at most once ever
+# ---------------------------------------------------------------------------
+
+def was_greeted(chat_id: str) -> bool:
+    """True if this chat was already auto-replied to, or marked as an existing contact."""
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM greeted_chats WHERE chat_id = ?", (chat_id,)
+        ).fetchone()
+    return row is not None
+
+
+def claim_greeting(chat_id: str, reason: str = "auto_replied") -> bool:
+    """Atomically reserve the right to greet this chat. True only for the caller that won."""
+    with _conn() as conn:
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO greeted_chats (chat_id, reason, created_at) VALUES (?, ?, ?)",
+            (chat_id, reason, datetime.utcnow().isoformat())
+        )
+        conn.commit()
+        return cur.rowcount == 1
+
+
+def release_greeting(chat_id: str) -> None:
+    """Undo a claim — used when the outgoing message failed to send."""
+    with _conn() as conn:
+        conn.execute("DELETE FROM greeted_chats WHERE chat_id = ?", (chat_id,))
         conn.commit()
