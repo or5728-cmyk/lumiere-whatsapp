@@ -12,10 +12,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from agent import handle_message
-from config import GREEN_API_INSTANCE, SPEC
+from config import GREEN_API_INSTANCE, SPEC, BOT_MODE, AUTO_REPLY_MESSAGE
 from database import (init_db, is_processed, mark_processed, clear_history,
-                      add_pending_followup, get_pending_followups, remove_pending_followup)
-from tools.whatsapp import send_reply
+                      add_pending_followup, get_pending_followups, remove_pending_followup,
+                      was_greeted, claim_greeting, release_greeting)
+from tools.whatsapp import send_reply, has_prior_history
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -171,6 +172,38 @@ async def webhook(request: Request):
     if not _is_authorized(sender_phone):
         logger.info(f"Unauthorized sender: {sender_phone}")
         return JSONResponse({"status": "ignored", "reason": "not authorized"})
+
+    # ---------------------------------------------------------------
+    # auto_reply_once mode — one fixed message, first-time contacts only
+    # ---------------------------------------------------------------
+    if BOT_MODE == "auto_reply_once":
+        if id_message:
+            mark_processed(id_message)
+
+        if was_greeted(chat_id):
+            return JSONResponse({"status": "ignored", "reason": "already greeted"})
+
+        if not AUTO_REPLY_MESSAGE:
+            logger.warning("AUTO_REPLY_MESSAGE is empty — staying silent")
+            return JSONResponse({"status": "ignored", "reason": "no message configured"})
+
+        if has_prior_history(chat_id):
+            claim_greeting(chat_id, "existing_contact")
+            logger.info(f"Known contact {chat_id} — staying silent")
+            return JSONResponse({"status": "ignored", "reason": "existing contact"})
+
+        if not claim_greeting(chat_id, "auto_replied"):
+            return JSONResponse({"status": "ignored", "reason": "greeting already claimed"})
+
+        try:
+            send_reply(chat_id, AUTO_REPLY_MESSAGE)
+            logger.info(f"Auto-replied to new contact {chat_id}")
+        except Exception as e:
+            release_greeting(chat_id)
+            logger.error(f"Auto-reply failed for {chat_id}: {e}", exc_info=True)
+            return JSONResponse({"status": "error", "reason": "send failed"}, status_code=500)
+
+        return JSONResponse({"status": "ok", "mode": "auto_reply_once"})
 
     # Parse message text
     msg_type = message_data.get("typeMessage", "")
